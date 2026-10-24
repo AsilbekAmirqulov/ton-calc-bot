@@ -10,7 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # BOT TOKENINGIZNI SHU YERGA YOZING:
-BOT_TOKEN = "8812900338:AAFkO_AzwXvsXEV1rQYbTnRV9agy0T6NaYY"
+BOT_TOKEN = "BOT_TOKENINGIZNI_BUYERGA_YOZING"
 
 rates_cache = {
     "ton_usd": 0.0,
@@ -24,19 +24,34 @@ async def get_rates():
     if now - rates_cache["last_update"] < 60 and rates_cache["ton_usd"] > 0:
         return rates_cache["ton_usd"], rates_cache["usd_uzs"]
 
-    async with aiohttp.ClientSession() as session:
+    # Serverlar bloklamasligi uchun brauzer kabi so'rov yuborish
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    async with aiohttp.ClientSession(headers=headers) as session:
         ton_usd = 0.0
 
-        # 1-urinish: CoinGecko API
+        # 1-urinish: TonAPI (Telegram ekotizimi API'si)
         try:
-            async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd", timeout=5) as resp:
+            async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=5) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    ton_usd = float(data["the-open-network"]["usd"])
+                    ton_usd = float(data["rates"]["TON"]["prices"]["USD"])
         except Exception:
             pass
 
-        # 2-urinish: OKX API
+        # 2-urinish: CoinGecko API
+        if ton_usd == 0.0:
+            try:
+                async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd", timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        ton_usd = float(data["the-open-network"]["usd"])
+            except Exception:
+                pass
+
+        # 3-urinish: OKX API
         if ton_usd == 0.0:
             try:
                 async with session.get("https://www.okx.com/api/v5/market/ticker?instId=TON-USDT", timeout=5) as resp:
@@ -46,7 +61,7 @@ async def get_rates():
             except Exception:
                 pass
 
-        # 3-urinish: Binance API
+        # 4-urinish: Binance API
         if ton_usd == 0.0:
             try:
                 async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=TONUSDT", timeout=5) as resp:
@@ -57,7 +72,7 @@ async def get_rates():
                 pass
 
         if ton_usd == 0.0:
-            ton_usd = rates_cache["ton_usd"]
+            ton_usd = rates_cache["ton_usd"] or 5.0
 
         # Markaziy Bank API - USD/UZS
         usd_uzs = 0.0
@@ -72,8 +87,7 @@ async def get_rates():
         if usd_uzs == 0.0:
             usd_uzs = rates_cache["usd_uzs"] or 12800.0
 
-        if ton_usd > 0:
-            rates_cache["ton_usd"] = ton_usd
+        rates_cache["ton_usd"] = ton_usd
         rates_cache["usd_uzs"] = usd_uzs
         rates_cache["last_update"] = now
 
@@ -112,10 +126,13 @@ dp = Dispatcher()
 async def handle_messages(message: types.Message):
     text = message.text.strip().lower()
 
-    # 1. TON kalkulyatori
-    ton_match = re.search(r'^\b(\d+(?:[\.,]\d+)?)\s*ton\b', text)
-    if ton_match:
-        amount = float(ton_match.group(1).replace(',', '.'))
+    # 1. TON / GRAM kalkulyatori (Lotin va Kirill xabarlarini avtomatik tanish)
+    # Masalan: "1 ton", "2.5 тон", "11.2 gram", "10 грамм", "15tonn"
+    crypto_match = re.search(r'^\b(\d+(?:[\.,]\d+)?)\s*(ton|tonn|тон|тонн|gram|gramm|грамм)\b', text)
+    if crypto_match:
+        amount = float(crypto_match.group(1).replace(',', '.'))
+        unit_word = crypto_match.group(2)
+        
         ton_usd, usd_uzs = await get_rates()
 
         if ton_usd == 0:
@@ -126,7 +143,7 @@ async def handle_messages(message: types.Message):
         total_uzs = total_usd * usd_uzs
 
         formatted_uzs = f"{total_uzs:,.0f}"
-        response = f"<b>{amount:g} ton</b> = <b>{total_usd:.2f} usd</b> | <b>{formatted_uzs} so'm</b>"
+        response = f"<b>{amount:g} {unit_word}</b> = <b>{total_usd:.2f} usd</b> | <b>{formatted_uzs} so'm</b>"
 
         kb = get_delete_keyboard(message.from_user.id)
         await message.reply(response, reply_markup=kb)
@@ -168,7 +185,6 @@ async def handle_ping(request):
     return web.Response(text="Bot 24/7 rejimida ishlayapti!")
 
 async def main():
-    # Render uchun HTTP serverni ishga tushirish
     app = web.Application()
     app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app)
