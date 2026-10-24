@@ -36,7 +36,7 @@ async def update_rates():
         async with aiohttp.ClientSession(headers=headers) as session:
             # 1. CoinCap API
             try:
-                async with session.get("https://api.coincap.io/v2/assets?ids=bitcoin,ethereum,the-open-network", timeout=5) as resp:
+                async with session.get("https://api.coincap.io/v2/assets?ids=bitcoin,ethereum,the-open-network", timeout=4) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         for item in data.get("data", []):
@@ -49,7 +49,7 @@ async def update_rates():
             # 2. OKX API (Zaxira)
             if prices["BTC"] == 0.0 or prices["TON"] == 0.0:
                 try:
-                    async with session.get("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT", timeout=5) as resp:
+                    async with session.get("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT", timeout=4) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             prices["BTC"] = float(data["data"][0]["last"])
@@ -57,7 +57,7 @@ async def update_rates():
                     pass
 
                 try:
-                    async with session.get("https://www.okx.com/api/v5/market/ticker?instId=TON-USDT", timeout=5) as resp:
+                    async with session.get("https://www.okx.com/api/v5/market/ticker?instId=TON-USDT", timeout=4) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             prices["TON"] = float(data["data"][0]["last"])
@@ -67,7 +67,7 @@ async def update_rates():
             # 3. TonAPI
             if prices["TON"] == 0.0:
                 try:
-                    async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=5) as resp:
+                    async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=4) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             prices["TON"] = float(data["rates"]["TON"]["prices"]["USD"])
@@ -76,7 +76,7 @@ async def update_rates():
 
             # 4. Markaziy Bank API
             try:
-                async with session.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=5) as resp:
+                async with session.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=4) as resp:
                     if resp.status == 200:
                         data = await resp.json()
                         usd_uzs = float(data[0]["Rate"])
@@ -86,7 +86,7 @@ async def update_rates():
             # 5. Zaxira USD API
             if usd_uzs == 0.0:
                 try:
-                    async with session.get("https://open.er-api.com/v6/latest/USD", timeout=5) as resp:
+                    async with session.get("https://open.er-api.com/v6/latest/USD", timeout=4) as resp:
                         if resp.status == 200:
                             data = await resp.json()
                             usd_uzs = float(data["rates"]["UZS"])
@@ -108,8 +108,8 @@ async def update_rates():
 # Fonda uzluksiz yangilash davri
 async def fetch_rates_background():
     while True:
-        await asyncio.sleep(45)
         await update_rates()
+        await asyncio.sleep(45)
 
 def parse_k_m(expr: str) -> str:
     expr = re.sub(r'(\d+(?:\.\d+)?)\s*k\b', lambda m: str(float(m.group(1)) * 1000), expr)
@@ -156,7 +156,7 @@ async def handle_messages(message: types.Message):
         usd_uzs = rates_cache["usd_uzs"]
 
         if token_price == 0 or usd_uzs == 0:
-            await message.reply("⚠️ Kurs ma'lumotlari yuklanmoqda, iltimos 5 soniyadan so'ng qayta urinib ko'ring.")
+            await message.reply("⚠️ Kurs ma'lumotlari yuklanmoqda, iltimos 3 soniyadan so'ng qayta urinib ko'ring.")
             return
 
         total_usd = amount * token_price
@@ -205,6 +205,13 @@ async def handle_ping(request):
     return web.Response(text="Bot 24/7 rejimida ishlayapti!")
 
 async def main():
+    # 1. Eski webhook bo'lsa darhol o'chirish
+    try:
+        await bot.delete_webhook(drop_pending_updates=True)
+    except Exception:
+        pass
+
+    # 2. Veb-serverni sozlash va ishga tushirish
     app = web.Application()
     app.router.add_get("/", handle_ping)
     runner = web.AppRunner(app)
@@ -213,12 +220,11 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
 
-    print("Boshlang'ich kurslar yuklanmoqda...")
-    await update_rates()  # Boshlanishida kurslarni darhol bir marta yuklaydi
-
+    # 3. Kurslarni fonda yuklashni alohida parallel topshiq sifatida ishga tushirish (bloklamasligi uchun)
     asyncio.create_task(fetch_rates_background())
 
-    print("Bot muvaffaqiyatli ishga tushdi...")
+    print("Bot muvaffaqiyatli ishga tushdi va Telegram so'rovlarini kutmoqda...")
+    # 4. Telegram So'rovlarini qabul qilishni darhol boshlash
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
