@@ -12,8 +12,21 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 # BOT TOKENINGIZNI SHU YERGA YOZING:
 BOT_TOKEN = "BOT_TOKENINGIZNI_BUYERGA_YOZING"
 
+# Kriptovalutalar nomini asosiy kodlarga bog'lash (Lotin va Kirill)
+CRYPTO_MAP = {
+    'ton': 'TON', 'tonn': 'TON', 'тон': 'TON', 'тонн': 'TON', 'gram': 'TON', 'gramm': 'TON', 'грамм': 'TON',
+    'btc': 'BTC', 'бтк': 'BTC', 'bitcoin': 'BTC', 'биткоин': 'BTC', 'биткойн': 'BTC',
+    'eth': 'ETH', 'эфир': 'ETH', 'ethereum': 'ETH', 'этериум': 'ETH',
+    'usdt': 'USDT', 'usd': 'USDT', 'usdc': 'USDT', 'доллар': 'USDT'
+}
+
 rates_cache = {
-    "ton_usd": 0.0,
+    "prices": {
+        "TON": 0.0,
+        "BTC": 0.0,
+        "ETH": 0.0,
+        "USDT": 1.0
+    },
     "usd_uzs": 0.0,
     "last_update": 0
 }
@@ -21,58 +34,52 @@ rates_cache = {
 async def get_rates():
     now = time.time()
     # Har 60 soniyada bir marta API'dan yangilanadi
-    if now - rates_cache["last_update"] < 60 and rates_cache["ton_usd"] > 0:
-        return rates_cache["ton_usd"], rates_cache["usd_uzs"]
+    if now - rates_cache["last_update"] < 60 and all(v > 0 for k, v in rates_cache["prices"].items() if k != "USDT"):
+        return rates_cache["prices"], rates_cache["usd_uzs"]
 
-    # Serverlar bloklamasligi uchun brauzer kabi so'rov yuborish
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    async with aiohttp.ClientSession(headers=headers) as session:
-        ton_usd = 0.0
+    prices = rates_cache["prices"].copy()
 
-        # 1-urinish: TonAPI (Telegram ekotizimi API'si)
+    async with aiohttp.ClientSession(headers=headers) as session:
+        # 1-urinish: Binance API (BTC, ETH, TON narxlarini bir so'rovda olish)
         try:
-            async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=5) as resp:
+            async with session.get("https://api.binance.com/api/v3/ticker/price", timeout=5) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    ton_usd = float(data["rates"]["TON"]["prices"]["USD"])
+                    price_map = {item["symbol"]: float(item["price"]) for item in data if item["symbol"] in ["BTCUSDT", "ETHUSDT", "TONUSDT"]}
+                    if "TONUSDT" in price_map: prices["TON"] = price_map["TONUSDT"]
+                    if "BTCUSDT" in price_map: prices["BTC"] = price_map["BTCUSDT"]
+                    if "ETHUSDT" in price_map: prices["ETH"] = price_map["ETHUSDT"]
         except Exception:
             pass
 
-        # 2-urinish: CoinGecko API
-        if ton_usd == 0.0:
+        # 2-urinish: TonAPI (TON uchun)
+        if prices["TON"] == 0.0:
             try:
-                async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network&vs_currencies=usd", timeout=5) as resp:
+                async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        ton_usd = float(data["the-open-network"]["usd"])
+                        prices["TON"] = float(data["rates"]["TON"]["prices"]["USD"])
             except Exception:
                 pass
 
-        # 3-urinish: OKX API
-        if ton_usd == 0.0:
+        # 3-urinish: CoinGecko API (Zaxira manba)
+        if prices["BTC"] == 0.0 or prices["ETH"] == 0.0 or prices["TON"] == 0.0:
             try:
-                async with session.get("https://www.okx.com/api/v5/market/ticker?instId=TON-USDT", timeout=5) as resp:
+                async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network,bitcoin,ethereum&vs_currencies=usd", timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        ton_usd = float(data["data"][0]["last"])
+                        if "the-open-network" in data and prices["TON"] == 0.0:
+                            prices["TON"] = float(data["the-open-network"]["usd"])
+                        if "bitcoin" in data and prices["BTC"] == 0.0:
+                            prices["BTC"] = float(data["bitcoin"]["usd"])
+                        if "ethereum" in data and prices["ETH"] == 0.0:
+                            prices["ETH"] = float(data["ethereum"]["usd"])
             except Exception:
                 pass
-
-        # 4-urinish: Binance API
-        if ton_usd == 0.0:
-            try:
-                async with session.get("https://api.binance.com/api/v3/ticker/price?symbol=TONUSDT", timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        ton_usd = float(data["price"])
-            except Exception:
-                pass
-
-        if ton_usd == 0.0:
-            ton_usd = rates_cache["ton_usd"] or 5.0
 
         # Markaziy Bank API - USD/UZS
         usd_uzs = 0.0
@@ -87,11 +94,11 @@ async def get_rates():
         if usd_uzs == 0.0:
             usd_uzs = rates_cache["usd_uzs"] or 12800.0
 
-        rates_cache["ton_usd"] = ton_usd
+        rates_cache["prices"] = prices
         rates_cache["usd_uzs"] = usd_uzs
         rates_cache["last_update"] = now
 
-        return rates_cache["ton_usd"], rates_cache["usd_uzs"]
+        return rates_cache["prices"], rates_cache["usd_uzs"]
 
 def parse_k_m(expr: str) -> str:
     expr = re.sub(r'(\d+(?:\.\d+)?)\s*k\b', lambda m: str(float(m.group(1)) * 1000), expr)
@@ -126,24 +133,29 @@ dp = Dispatcher()
 async def handle_messages(message: types.Message):
     text = message.text.strip().lower()
 
-    # 1. TON / GRAM kalkulyatori (Lotin va Kirill xabarlarini avtomatik tanish)
-    # Masalan: "1 ton", "2.5 тон", "11.2 gram", "10 грамм", "15tonn"
-    crypto_match = re.search(r'^\b(\d+(?:[\.,]\d+)?)\s*(ton|tonn|тон|тонн|gram|gramm|грамм)\b', text)
+    # Kriptovalutalarni qidirish regex i
+    crypto_pattern = r'^\b(\d+(?:[\.,]\d+)?)\s*(' + '|'.join(CRYPTO_MAP.keys()) + r')\b'
+    crypto_match = re.search(crypto_pattern, text)
+
     if crypto_match:
         amount = float(crypto_match.group(1).replace(',', '.'))
         unit_word = crypto_match.group(2)
-        
-        ton_usd, usd_uzs = await get_rates()
+        crypto_code = CRYPTO_MAP.get(unit_word, 'TON')
 
-        if ton_usd == 0:
+        prices, usd_uzs = await get_rates()
+        token_price = prices.get(crypto_code, 0.0)
+
+        if token_price == 0:
             await message.reply("⚠️ Kurs ma'lumotlarini olishda xatolik yuz berdi. Birozdan so'ng qayta urinib ko'ring.")
             return
 
-        total_usd = amount * ton_usd
+        total_usd = amount * token_price
         total_uzs = total_usd * usd_uzs
 
         formatted_uzs = f"{total_uzs:,.0f}"
-        response = f"<b>{amount:g} {unit_word}</b> = <b>{total_usd:.2f} usd</b> | <b>{formatted_uzs} so'm</b>"
+        formatted_usd = f"{total_usd:,.2f}" if total_usd >= 1 else f"{total_usd:,.4f}"
+
+        response = f"<b>{amount:g} {unit_word}</b> = <b>{formatted_usd} usd</b> | <b>{formatted_uzs} so'm</b>"
 
         kb = get_delete_keyboard(message.from_user.id)
         await message.reply(response, reply_markup=kb)
@@ -180,7 +192,6 @@ async def delete_message_callback(callback: types.CallbackQuery):
     else:
         await callback.answer("Siz bu xabarni o'chira olmaysiz! Faqat muallif yoki admin o'chira oladi.", show_alert=True)
 
-# Render salomatlik tekshiruvi (Health check) uchun mini-server
 async def handle_ping(request):
     return web.Response(text="Bot 24/7 rejimida ishlayapti!")
 
