@@ -68,7 +68,7 @@ async def get_rates():
             except Exception:
                 pass
 
-        # 3. TonAPI (TON uchun)
+        # 3. TonAPI (TON uchun zaxira)
         if prices["TON"] == 0.0:
             try:
                 async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=5) as resp:
@@ -91,8 +91,9 @@ async def get_rates():
         if prices[k] == 0.0 and rates_cache["prices"].get(k, 0.0) > 0:
             prices[k] = rates_cache["prices"][k]
 
+    # Zaxira kurs 11 903 so'mga to'g'rilandi
     if usd_uzs == 0.0:
-        usd_uzs = rates_cache["usd_uzs"] or 12800.0
+        usd_uzs = rates_cache["usd_uzs"] or 11903.0
 
     rates_cache["prices"] = prices
     rates_cache["usd_uzs"] = usd_uzs
