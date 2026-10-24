@@ -9,8 +9,8 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# BOT TOKENINGIZNI SHU YERGA YOZING:
-BOT_TOKEN = "8812900338:AAFkO_AzwXvsXEV1rQYbTnRV9agy0T6NaYY"
+# Bot tokeni Render serverining Environment bo'limidan xavfsiz olinadi
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 CRYPTO_MAP = {
     'ton': 'TON', 'tonn': 'TON', 'тон': 'TON', 'тонн': 'TON', 'gram': 'TON', 'gramm': 'TON', 'грамм': 'TON',
@@ -20,19 +20,13 @@ CRYPTO_MAP = {
 }
 
 rates_cache = {
-    "prices": {
-        "TON": 0.0,
-        "BTC": 0.0,
-        "ETH": 0.0,
-        "USDT": 1.0
-    },
+    "prices": {"TON": 0.0, "BTC": 0.0, "ETH": 0.0, "USDT": 1.0},
     "usd_uzs": 0.0,
     "last_update": 0
 }
 
 async def get_rates():
     now = time.time()
-    # Har 60 soniyada bir marta API'dan yangilanadi
     if now - rates_cache["last_update"] < 60 and all(v > 0 for k, v in rates_cache["prices"].items()):
         return rates_cache["prices"], rates_cache["usd_uzs"]
 
@@ -44,36 +38,37 @@ async def get_rates():
     usd_uzs = 0.0
 
     async with aiohttp.ClientSession(headers=headers) as session:
-        # 1. CoinGecko API - Barcha kriptolarni bitta so'rovda olish
+        # 1. CoinCap API (BTC, ETH, TON uchun barqaror)
         try:
-            url = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network,bitcoin,ethereum,tether&vs_currencies=usd"
-            async with session.get(url, timeout=5) as resp:
+            async with session.get("https://api.coincap.io/v2/assets?ids=bitcoin,ethereum,the-open-network", timeout=5) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    prices["TON"] = float(data.get("the-open-network", {}).get("usd", 0.0))
-                    prices["BTC"] = float(data.get("bitcoin", {}).get("usd", 0.0))
-                    prices["ETH"] = float(data.get("ethereum", {}).get("usd", 0.0))
-                    prices["USDT"] = float(data.get("tether", {}).get("usd", 1.0))
+                    for item in data.get("data", []):
+                        if item["id"] == "bitcoin": prices["BTC"] = float(item["priceUsd"])
+                        elif item["id"] == "ethereum": prices["ETH"] = float(item["priceUsd"])
+                        elif item["id"] == "the-open-network": prices["TON"] = float(item["priceUsd"])
         except Exception:
             pass
 
-        # 2. Binance API - Faqat kerakli 3 ta juftlik uchun yengil so'rov
+        # 2. OKX API (Zaxira manba)
         if prices["BTC"] == 0.0 or prices["TON"] == 0.0:
             try:
-                url = 'https://api.binance.com/api/v3/ticker/price?symbols=["BTCUSDT","ETHUSDT","TONUSDT"]'
-                async with session.get(url, timeout=5) as resp:
+                async with session.get("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT", timeout=5) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        for item in data:
-                            sym = item.get("symbol")
-                            price = float(item.get("price", 0))
-                            if sym == "TONUSDT" and prices["TON"] == 0.0: prices["TON"] = price
-                            elif sym == "BTCUSDT" and prices["BTC"] == 0.0: prices["BTC"] = price
-                            elif sym == "ETHUSDT" and prices["ETH"] == 0.0: prices["ETH"] = price
+                        prices["BTC"] = float(data["data"][0]["last"])
             except Exception:
                 pass
 
-        # 3. TonAPI - TON uchun zaxira manba
+            try:
+                async with session.get("https://www.okx.com/api/v5/market/ticker?instId=TON-USDT", timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        prices["TON"] = float(data["data"][0]["last"])
+            except Exception:
+                pass
+
+        # 3. TonAPI (TON uchun)
         if prices["TON"] == 0.0:
             try:
                 async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=5) as resp:
@@ -83,7 +78,7 @@ async def get_rates():
             except Exception:
                 pass
 
-        # 4. O'zbekiston Markaziy Banki - Rasmiy USD/UZS kursi
+        # 4. O'zbekiston Markaziy Banki (USD / UZS)
         try:
             async with session.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=5) as resp:
                 if resp.status == 200:
@@ -92,7 +87,6 @@ async def get_rates():
         except Exception:
             pass
 
-    # Nol bo'lib qolgan qiymatlarga keshdagi so'nggi ma'lumotlarni berish
     for k in prices:
         if prices[k] == 0.0 and rates_cache["prices"].get(k, 0.0) > 0:
             prices[k] = rates_cache["prices"][k]
@@ -166,7 +160,6 @@ async def handle_messages(message: types.Message):
         await message.reply(response, reply_markup=kb)
         return
 
-    # Matematik amallar
     if re.search(r'[\+\-\*\/\%]', text) and not re.search(r'[a-jl-ln-zq-zA-JL-LN-ZQ-Zа-яА-Я]', text):
         result = safe_eval(text)
         if result is not None:
