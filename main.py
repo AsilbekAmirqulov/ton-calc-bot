@@ -27,7 +27,7 @@ rates_cache = {
 
 async def get_rates():
     now = time.time()
-    if now - rates_cache["last_update"] < 60 and all(v > 0 for k, v in rates_cache["prices"].items()):
+    if now - rates_cache["last_update"] < 60 and all(v > 0 for k, v in rates_cache["prices"].items()) and rates_cache["usd_uzs"] > 0:
         return rates_cache["prices"], rates_cache["usd_uzs"]
 
     headers = {
@@ -38,7 +38,7 @@ async def get_rates():
     usd_uzs = 0.0
 
     async with aiohttp.ClientSession(headers=headers) as session:
-        # 1. CoinCap API (BTC, ETH, TON uchun barqaror)
+        # 1. CoinCap API (BTC, ETH, TON uchun asosiy)
         try:
             async with session.get("https://api.coincap.io/v2/assets?ids=bitcoin,ethereum,the-open-network", timeout=5) as resp:
                 if resp.status == 200:
@@ -50,7 +50,7 @@ async def get_rates():
         except Exception:
             pass
 
-        # 2. OKX API (Zaxira manba)
+        # 2. OKX API (Kriptolar uchun zaxira)
         if prices["BTC"] == 0.0 or prices["TON"] == 0.0:
             try:
                 async with session.get("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT", timeout=5) as resp:
@@ -78,7 +78,7 @@ async def get_rates():
             except Exception:
                 pass
 
-        # 4. O'zbekiston Markaziy Banki (USD / UZS)
+        # 4. Asosiy USD / UZS manbasi — O'zbekiston Markaziy Banki API
         try:
             async with session.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=5) as resp:
                 if resp.status == 200:
@@ -87,13 +87,23 @@ async def get_rates():
         except Exception:
             pass
 
+        # 5. Zaxira USD / UZS API — Markaziy Bank ishlamay qolganda avtomatik ishga tushadi
+        if usd_uzs == 0.0:
+            try:
+                async with session.get("https://open.er-api.com/v6/latest/USD", timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        usd_uzs = float(data["rates"]["UZS"])
+            except Exception:
+                pass
+
+    # Keshni yangilash
     for k in prices:
         if prices[k] == 0.0 and rates_cache["prices"].get(k, 0.0) > 0:
             prices[k] = rates_cache["prices"][k]
 
-    # Zaxira kurs 11 903 so'mga to'g'rilandi
-    if usd_uzs == 0.0:
-        usd_uzs = rates_cache["usd_uzs"] or 11903.0
+    if usd_uzs == 0.0 and rates_cache["usd_uzs"] > 0:
+        usd_uzs = rates_cache["usd_uzs"]
 
     rates_cache["prices"] = prices
     rates_cache["usd_uzs"] = usd_uzs
@@ -145,7 +155,7 @@ async def handle_messages(message: types.Message):
         prices, usd_uzs = await get_rates()
         token_price = prices.get(crypto_code, 0.0)
 
-        if token_price == 0:
+        if token_price == 0 or usd_uzs == 0:
             await message.reply("⚠️ Kurs ma'lumotlarini olishda xatolik yuz berdi. Birozdan so'ng qayta urinib ko'ring.")
             return
 
