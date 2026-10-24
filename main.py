@@ -9,7 +9,6 @@ from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-# Bot tokeni Render serverining Environment bo'limidan xavfsiz olinadi
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
 CRYPTO_MAP = {
@@ -25,91 +24,91 @@ rates_cache = {
     "last_update": 0
 }
 
-async def get_rates():
-    now = time.time()
-    if now - rates_cache["last_update"] < 60 and all(v > 0 for k, v in rates_cache["prices"].items()) and rates_cache["usd_uzs"] > 0:
-        return rates_cache["prices"], rates_cache["usd_uzs"]
-
+# Kurslarni fonda (background) uzluksiz yangilab turuvchi funksiya
+async def fetch_rates_background():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    prices = {"TON": 0.0, "BTC": 0.0, "ETH": 0.0, "USDT": 1.0}
-    usd_uzs = 0.0
-
-    async with aiohttp.ClientSession(headers=headers) as session:
-        # 1. CoinCap API (BTC, ETH, TON uchun asosiy)
+    while True:
         try:
-            async with session.get("https://api.coincap.io/v2/assets?ids=bitcoin,ethereum,the-open-network", timeout=5) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    for item in data.get("data", []):
-                        if item["id"] == "bitcoin": prices["BTC"] = float(item["priceUsd"])
-                        elif item["id"] == "ethereum": prices["ETH"] = float(item["priceUsd"])
-                        elif item["id"] == "the-open-network": prices["TON"] = float(item["priceUsd"])
+            prices = {"TON": 0.0, "BTC": 0.0, "ETH": 0.0, "USDT": 1.0}
+            usd_uzs = 0.0
+
+            async with aiohttp.ClientSession(headers=headers) as session:
+                # 1. CoinCap API
+                try:
+                    async with session.get("https://api.coincap.io/v2/assets?ids=bitcoin,ethereum,the-open-network", timeout=5) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            for item in data.get("data", []):
+                                if item["id"] == "bitcoin": prices["BTC"] = float(item["priceUsd"])
+                                elif item["id"] == "ethereum": prices["ETH"] = float(item["priceUsd"])
+                                elif item["id"] == "the-open-network": prices["TON"] = float(item["priceUsd"])
+                except Exception:
+                    pass
+
+                # 2. OKX API (Zaxira)
+                if prices["BTC"] == 0.0 or prices["TON"] == 0.0:
+                    try:
+                        async with session.get("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT", timeout=5) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                prices["BTC"] = float(data["data"][0]["last"])
+                    except Exception:
+                        pass
+
+                    try:
+                        async with session.get("https://www.okx.com/api/v5/market/ticker?instId=TON-USDT", timeout=5) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                prices["TON"] = float(data["data"][0]["last"])
+                    except Exception:
+                        pass
+
+                # 3. TonAPI
+                if prices["TON"] == 0.0:
+                    try:
+                        async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=5) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                prices["TON"] = float(data["rates"]["TON"]["prices"]["USD"])
+                    except Exception:
+                        pass
+
+                # 4. Markaziy Bank API
+                try:
+                    async with session.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=5) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            usd_uzs = float(data[0]["Rate"])
+                except Exception:
+                    pass
+
+                # 5. Zaxira USD API
+                if usd_uzs == 0.0:
+                    try:
+                        async with session.get("https://open.er-api.com/v6/latest/USD", timeout=5) as resp:
+                            if resp.status == 200:
+                                data = await resp.json()
+                                usd_uzs = float(data["rates"]["UZS"])
+                    except Exception:
+                        pass
+
+            # Xotirani yangilash
+            for k in prices:
+                if prices[k] > 0:
+                    rates_cache["prices"][k] = prices[k]
+
+            if usd_uzs > 0:
+                rates_cache["usd_uzs"] = usd_uzs
+
+            rates_cache["last_update"] = time.time()
         except Exception:
             pass
 
-        # 2. OKX API (Kriptolar uchun zaxira)
-        if prices["BTC"] == 0.0 or prices["TON"] == 0.0:
-            try:
-                async with session.get("https://www.okx.com/api/v5/market/ticker?instId=BTC-USDT", timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        prices["BTC"] = float(data["data"][0]["last"])
-            except Exception:
-                pass
-
-            try:
-                async with session.get("https://www.okx.com/api/v5/market/ticker?instId=TON-USDT", timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        prices["TON"] = float(data["data"][0]["last"])
-            except Exception:
-                pass
-
-        # 3. TonAPI (TON uchun zaxira)
-        if prices["TON"] == 0.0:
-            try:
-                async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        prices["TON"] = float(data["rates"]["TON"]["prices"]["USD"])
-            except Exception:
-                pass
-
-        # 4. Asosiy USD / UZS manbasi — O'zbekiston Markaziy Banki API
-        try:
-            async with session.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=5) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    usd_uzs = float(data[0]["Rate"])
-        except Exception:
-            pass
-
-        # 5. Zaxira USD / UZS API — Markaziy Bank ishlamay qolganda avtomatik ishga tushadi
-        if usd_uzs == 0.0:
-            try:
-                async with session.get("https://open.er-api.com/v6/latest/USD", timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        usd_uzs = float(data["rates"]["UZS"])
-            except Exception:
-                pass
-
-    # Keshni yangilash
-    for k in prices:
-        if prices[k] == 0.0 and rates_cache["prices"].get(k, 0.0) > 0:
-            prices[k] = rates_cache["prices"][k]
-
-    if usd_uzs == 0.0 and rates_cache["usd_uzs"] > 0:
-        usd_uzs = rates_cache["usd_uzs"]
-
-    rates_cache["prices"] = prices
-    rates_cache["usd_uzs"] = usd_uzs
-    rates_cache["last_update"] = now
-
-    return rates_cache["prices"], rates_cache["usd_uzs"]
+        # Har 45 soniyada fonda avtomatik yangilanadi
+        await asyncio.sleep(45)
 
 def parse_k_m(expr: str) -> str:
     expr = re.sub(r'(\d+(?:\.\d+)?)\s*k\b', lambda m: str(float(m.group(1)) * 1000), expr)
@@ -152,11 +151,11 @@ async def handle_messages(message: types.Message):
         unit_word = crypto_match.group(2)
         crypto_code = CRYPTO_MAP.get(unit_word, 'TON')
 
-        prices, usd_uzs = await get_rates()
-        token_price = prices.get(crypto_code, 0.0)
+        token_price = rates_cache["prices"].get(crypto_code, 0.0)
+        usd_uzs = rates_cache["usd_uzs"]
 
         if token_price == 0 or usd_uzs == 0:
-            await message.reply("⚠️ Kurs ma'lumotlarini olishda xatolik yuz berdi. Birozdan so'ng qayta urinib ko'ring.")
+            await message.reply("⚠️ Kurs ma'lumotlari yuklanmoqda, iltimos 5 soniyadan so'ng qayta urinib ko'ring.")
             return
 
         total_usd = amount * token_price
@@ -212,6 +211,9 @@ async def main():
     port = int(os.environ.get("PORT", 8080))
     site = web.TCPSite(runner, "0.0.0.0", port)
     await site.start()
+
+    # Kurslarni fonda yangilash jarayonini ishga tushirish
+    asyncio.create_task(fetch_rates_background())
 
     print("Bot muvaffaqiyatli ishga tushdi...")
     await dp.start_polling(bot)
