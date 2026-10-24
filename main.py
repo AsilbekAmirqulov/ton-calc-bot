@@ -12,7 +12,6 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 # BOT TOKENINGIZNI SHU YERGA YOZING:
 BOT_TOKEN = "8812900338:AAFkO_AzwXvsXEV1rQYbTnRV9agy0T6NaYY"
 
-# Kriptovalutalar nomini asosiy kodlarga bog'lash (Lotin va Kirill)
 CRYPTO_MAP = {
     'ton': 'TON', 'tonn': 'TON', 'тон': 'TON', 'тонн': 'TON', 'gram': 'TON', 'gramm': 'TON', 'грамм': 'TON',
     'btc': 'BTC', 'бтк': 'BTC', 'bitcoin': 'BTC', 'биткоин': 'BTC', 'биткойн': 'BTC',
@@ -34,29 +33,47 @@ rates_cache = {
 async def get_rates():
     now = time.time()
     # Har 60 soniyada bir marta API'dan yangilanadi
-    if now - rates_cache["last_update"] < 60 and all(v > 0 for k, v in rates_cache["prices"].items() if k != "USDT"):
+    if now - rates_cache["last_update"] < 60 and all(v > 0 for k, v in rates_cache["prices"].items()):
         return rates_cache["prices"], rates_cache["usd_uzs"]
 
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
 
-    prices = rates_cache["prices"].copy()
+    prices = {"TON": 0.0, "BTC": 0.0, "ETH": 0.0, "USDT": 1.0}
+    usd_uzs = 0.0
 
     async with aiohttp.ClientSession(headers=headers) as session:
-        # 1-urinish: Binance API (BTC, ETH, TON narxlarini bir so'rovda olish)
+        # 1. CoinGecko API - Barcha kriptolarni bitta so'rovda olish
         try:
-            async with session.get("https://api.binance.com/api/v3/ticker/price", timeout=5) as resp:
+            url = "https://api.coingecko.com/api/v3/simple/price?ids=the-open-network,bitcoin,ethereum,tether&vs_currencies=usd"
+            async with session.get(url, timeout=5) as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    price_map = {item["symbol"]: float(item["price"]) for item in data if item["symbol"] in ["BTCUSDT", "ETHUSDT", "TONUSDT"]}
-                    if "TONUSDT" in price_map: prices["TON"] = price_map["TONUSDT"]
-                    if "BTCUSDT" in price_map: prices["BTC"] = price_map["BTCUSDT"]
-                    if "ETHUSDT" in price_map: prices["ETH"] = price_map["ETHUSDT"]
+                    prices["TON"] = float(data.get("the-open-network", {}).get("usd", 0.0))
+                    prices["BTC"] = float(data.get("bitcoin", {}).get("usd", 0.0))
+                    prices["ETH"] = float(data.get("ethereum", {}).get("usd", 0.0))
+                    prices["USDT"] = float(data.get("tether", {}).get("usd", 1.0))
         except Exception:
             pass
 
-        # 2-urinish: TonAPI (TON uchun)
+        # 2. Binance API - Faqat kerakli 3 ta juftlik uchun yengil so'rov
+        if prices["BTC"] == 0.0 or prices["TON"] == 0.0:
+            try:
+                url = 'https://api.binance.com/api/v3/ticker/price?symbols=["BTCUSDT","ETHUSDT","TONUSDT"]'
+                async with session.get(url, timeout=5) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        for item in data:
+                            sym = item.get("symbol")
+                            price = float(item.get("price", 0))
+                            if sym == "TONUSDT" and prices["TON"] == 0.0: prices["TON"] = price
+                            elif sym == "BTCUSDT" and prices["BTC"] == 0.0: prices["BTC"] = price
+                            elif sym == "ETHUSDT" and prices["ETH"] == 0.0: prices["ETH"] = price
+            except Exception:
+                pass
+
+        # 3. TonAPI - TON uchun zaxira manba
         if prices["TON"] == 0.0:
             try:
                 async with session.get("https://tonapi.io/v2/rates?tokens=ton&currencies=usd", timeout=5) as resp:
@@ -66,23 +83,7 @@ async def get_rates():
             except Exception:
                 pass
 
-        # 3-urinish: CoinGecko API (Zaxira manba)
-        if prices["BTC"] == 0.0 or prices["ETH"] == 0.0 or prices["TON"] == 0.0:
-            try:
-                async with session.get("https://api.coingecko.com/api/v3/simple/price?ids=the-open-network,bitcoin,ethereum&vs_currencies=usd", timeout=5) as resp:
-                    if resp.status == 200:
-                        data = await resp.json()
-                        if "the-open-network" in data and prices["TON"] == 0.0:
-                            prices["TON"] = float(data["the-open-network"]["usd"])
-                        if "bitcoin" in data and prices["BTC"] == 0.0:
-                            prices["BTC"] = float(data["bitcoin"]["usd"])
-                        if "ethereum" in data and prices["ETH"] == 0.0:
-                            prices["ETH"] = float(data["ethereum"]["usd"])
-            except Exception:
-                pass
-
-        # Markaziy Bank API - USD/UZS
-        usd_uzs = 0.0
+        # 4. O'zbekiston Markaziy Banki - Rasmiy USD/UZS kursi
         try:
             async with session.get("https://cbu.uz/uz/arkhiv-kursov-valyut/json/USD/", timeout=5) as resp:
                 if resp.status == 200:
@@ -91,14 +92,19 @@ async def get_rates():
         except Exception:
             pass
 
-        if usd_uzs == 0.0:
-            usd_uzs = rates_cache["usd_uzs"] or 12800.0
+    # Nol bo'lib qolgan qiymatlarga keshdagi so'nggi ma'lumotlarni berish
+    for k in prices:
+        if prices[k] == 0.0 and rates_cache["prices"].get(k, 0.0) > 0:
+            prices[k] = rates_cache["prices"][k]
 
-        rates_cache["prices"] = prices
-        rates_cache["usd_uzs"] = usd_uzs
-        rates_cache["last_update"] = now
+    if usd_uzs == 0.0:
+        usd_uzs = rates_cache["usd_uzs"] or 12800.0
 
-        return rates_cache["prices"], rates_cache["usd_uzs"]
+    rates_cache["prices"] = prices
+    rates_cache["usd_uzs"] = usd_uzs
+    rates_cache["last_update"] = now
+
+    return rates_cache["prices"], rates_cache["usd_uzs"]
 
 def parse_k_m(expr: str) -> str:
     expr = re.sub(r'(\d+(?:\.\d+)?)\s*k\b', lambda m: str(float(m.group(1)) * 1000), expr)
@@ -133,7 +139,6 @@ dp = Dispatcher()
 async def handle_messages(message: types.Message):
     text = message.text.strip().lower()
 
-    # Kriptovalutalarni qidirish regex i
     crypto_pattern = r'^\b(\d+(?:[\.,]\d+)?)\s*(' + '|'.join(CRYPTO_MAP.keys()) + r')\b'
     crypto_match = re.search(crypto_pattern, text)
 
@@ -161,7 +166,7 @@ async def handle_messages(message: types.Message):
         await message.reply(response, reply_markup=kb)
         return
 
-    # 2. Matematik amallar
+    # Matematik amallar
     if re.search(r'[\+\-\*\/\%]', text) and not re.search(r'[a-jl-ln-zq-zA-JL-LN-ZQ-Zа-яА-Я]', text):
         result = safe_eval(text)
         if result is not None:
