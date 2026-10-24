@@ -10,7 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 # BOT TOKENINGIZNI SHU YERGA YOZING:
-BOT_TOKEN = "BOT_TOKENINGIZNI_BUYERGA_YOZING"
+BOT_TOKEN = "8812900338:AAFkO_AzwXvsXEV1rQYbTnRV9agy0T6NaYY"
 
 # Kriptovalutalar nomini asosiy kodlarga bog'lash (Lotin va Kirill)
 CRYPTO_MAP = {
