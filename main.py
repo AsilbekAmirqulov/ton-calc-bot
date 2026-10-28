@@ -8,8 +8,12 @@ from aiogram import Bot, Dispatcher, F, types
 from aiogram.enums import ParseMode
 from aiogram.client.default import DefaultBotProperties
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
+
+# Render'dagi xususiy manzilingiz webhook uchun ulanadi
+WEBHOOK_URL = "https://ton-calc-bot.onrender.com/webhook"
 
 CRYPTO_MAP = {
     'ton': 'TON', 'tonn': 'TON', 'тон': 'TON', 'тонн': 'TON', 'gram': 'TON', 'gramm': 'TON', 'грамм': 'TON',
@@ -24,7 +28,6 @@ rates_cache = {
     "last_update": 0
 }
 
-# Bir marta kurslarni yangilash funksiyasi
 async def update_rates():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -201,31 +204,32 @@ async def delete_message_callback(callback: types.CallbackQuery):
     else:
         await callback.answer("Siz bu xabarni o'chira olmaysiz! Faqat muallif yoki admin o'chira oladi.", show_alert=True)
 
-async def handle_ping(request):
-    return web.Response(text="Bot 24/7 rejimida ishlayapti!")
+# ----------------- WEBHOOK SOZLAMALARI -----------------
 
-async def main():
-    # 1. Eski webhook bo'lsa darhol o'chirish
-    try:
-        await bot.delete_webhook(drop_pending_updates=True)
-    except Exception:
-        pass
-
-    # 2. Veb-serverni sozlash va ishga tushirish
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.environ.get("PORT", 8080))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-
-    # 3. Kurslarni fonda yuklashni alohida parallel topshiq sifatida ishga tushirish (bloklamasligi uchun)
+async def on_startup(bot: Bot):
+    # Telegramga webhook ulash (endi bot aslo qotib qolmaydi)
+    await bot.set_webhook(WEBHOOK_URL, drop_pending_updates=True)
+    print(f"Webhook muvaffaqiyatli o'rnatildi: {WEBHOOK_URL}")
+    await update_rates()
     asyncio.create_task(fetch_rates_background())
 
-    print("Bot muvaffaqiyatli ishga tushdi va Telegram so'rovlarini kutmoqda...")
-    # 4. Telegram So'rovlarini qabul qilishni darhol boshlash
-    await dp.start_polling(bot)
+async def handle_ping(request):
+    return web.Response(text="Bot Webhook rejimida 24/7 ishlayapti!")
+
+def main():
+    dp.startup.register(on_startup)
+
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+
+    # Telegram'ning webhook zaproslarini aynan shu yerda qabul qilamiz
+    webhook_requests_handler = SimpleRequestHandler(dispatcher=dp, bot=bot)
+    webhook_requests_handler.register(app, path="/webhook")
+    setup_application(app, dp, bot=bot)
+
+    port = int(os.environ.get("PORT", 8080))
+    print("Veb-server ishga tushmoqda...")
+    web.run_app(app, host="0.0.0.0", port=port)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
